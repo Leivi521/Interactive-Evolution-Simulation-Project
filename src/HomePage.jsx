@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 
-function HomePage({ onEnterSimulation }) {
+function HomePage({ onEnterSimulation, missionManager, achievementManager }) {
   const heroCanvasRef = useRef(null);
   const genomeCanvasRef = useRef(null);
   const featureCanvasRefs = useRef([]);
@@ -313,9 +313,19 @@ function HomePage({ onEnterSimulation }) {
         <div className="hero-content">
           <h1 className="hero-title">Where Digital Life Learns to Evolve.</h1>
           <p className="hero-subtitle">An experimental ecosystem shaped by you.</p>
-          <button onClick={onEnterSimulation} className="cta-button">
-            Enter the Simulation
-          </button>
+          <div className="cta-buttons">
+            <button onClick={() => onEnterSimulation('missions')} className="cta-button primary">
+              Mission Mode
+            </button>
+            <button onClick={() => onEnterSimulation('sandbox')} className="cta-button secondary">
+              Sandbox Mode
+            </button>
+          </div>
+          {achievementManager && (
+            <div className="achievement-preview">
+              <span>üèÜ {achievementManager.getProgress().unlocked} / {achievementManager.getProgress().total} Achievements</span>
+            </div>
+          )}
         </div>
       </section>
 
@@ -373,7 +383,7 @@ function HomePage({ onEnterSimulation }) {
             <h2 className="section-title">Genetic Architecture</h2>
             <div className="trait-cards">
               <div className="trait-card">
-                <span className="trait-icon">°</span>
+                <span className="trait-icon">ÔøΩ</span>
                 <span className="trait-name">Speed</span>
                 <span className="trait-value">{traitValues.speed}</span>
               </div>
@@ -388,7 +398,7 @@ function HomePage({ onEnterSimulation }) {
                 <span className="trait-value">{traitValues.size}</span>
               </div>
               <div className="trait-card">
-                <span className="trait-icon">ô</span>
+                <span className="trait-icon">ÔøΩ</span>
                 <span className="trait-name">Efficiency</span>
                 <span className="trait-value">{traitValues.efficiency}</span>
               </div>
@@ -402,11 +412,11 @@ function HomePage({ onEnterSimulation }) {
         <h2 className="section-title">Command the Evolution</h2>
         <div className="intervention-tools">
           <div className="tool-item">
-            <div className="tool-icon">>Ï</div>
+            <div className="tool-icon">>ÔøΩ</div>
             <span className="tool-label">Mutation Rate</span>
           </div>
           <div className="tool-item">
-            <div className="tool-icon">ñ</div>
+            <div className="tool-icon">ÔøΩ</div>
             <span className="tool-label">Selection Pressure</span>
           </div>
           <div className="tool-item">

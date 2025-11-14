@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Simulation } from './SimulationEngine';
+import { audioManager } from './AudioSystem';
 
-function SimulationPage({ onExit }) {
+function SimulationPage({ onExit, missionId, missionManager, achievementManager, encyclopedia }) {
   const canvasRef = useRef(null);
   const fitnessGraphRef = useRef(null);
   const simulationRef = useRef(null);
@@ -17,8 +18,17 @@ function SimulationPage({ onExit }) {
     avgSpeed: '0.00',
     avgVision: '0',
     avgSize: '0.00',
-    avgEfficiency: '0.00'
+    avgEfficiency: '0.00',
+    avgAggression: '0.00',
+    avgDietType: '0.00',
+    avgMutationStability: '0.00',
+    temperature: '20.0',
+    toxicity: '0.0'
   });
+
+  const [missionStatus, setMissionStatus] = useState(null);
+  const [newAchievements, setNewAchievements] = useState([]);
+  const [showAchievement, setShowAchievement] = useState(null);
 
   const [selectedOrganism, setSelectedOrganism] = useState(null);
   const [activeTool, setActiveTool] = useState('select');
@@ -40,6 +50,12 @@ function SimulationPage({ onExit }) {
     canvas.height = parent.clientHeight;
 
     simulationRef.current = new Simulation(canvas.width, canvas.height, 30);
+
+    // Start mission if one is selected
+    if (missionId && missionManager) {
+      missionManager.startMission(missionId, simulationRef.current);
+    }
+
     updateStats();
 
     return () => {
@@ -47,7 +63,7 @@ function SimulationPage({ onExit }) {
         cancelAnimationFrame(animationFrameRef.current);
       }
     };
-  }, []);
+  }, [missionId]);
 
   // Main animation loop
   useEffect(() => {
@@ -65,6 +81,32 @@ function SimulationPage({ onExit }) {
       renderSimulation();
       updateStats();
       renderFitnessGraph();
+
+      // Update encyclopedia
+      if (encyclopedia) {
+        encyclopedia.updateFromPopulation(simulation.population, simulation.generation);
+      }
+
+      // Check achievements
+      if (achievementManager) {
+        const unlocked = achievementManager.checkAchievements(simulation);
+        if (unlocked.length > 0) {
+          setNewAchievements(unlocked);
+          setShowAchievement(unlocked[0]); // Show first achievement
+          setTimeout(() => setShowAchievement(null), 3000); // Hide after 3 seconds
+        }
+      }
+
+      // Update mission status
+      if (missionId && missionManager) {
+        const status = missionManager.updateMission(simulation);
+        setMissionStatus(status);
+
+        // Check if mission complete
+        if (status && status.mission.completed) {
+          achievementManager?.trackMissionComplete(status.mission.stars);
+        }
+      }
 
       setGeneration(simulation.generation);
 
@@ -111,28 +153,76 @@ function SimulationPage({ onExit }) {
       if (!organism.alive) return;
 
       const size = organism.genome.genes.size;
+      const genes = organism.genome.genes;
 
       // Draw vision range (if selected)
       if (selectedOrganism && selectedOrganism.id === organism.id) {
         ctx.strokeStyle = 'rgba(74, 168, 255, 0.2)';
         ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.arc(organism.x, organism.y, organism.genome.genes.vision, 0, Math.PI * 2);
+        ctx.arc(organism.x, organism.y, genes.vision, 0, Math.PI * 2);
         ctx.stroke();
       }
 
-      // Draw organism body
-      ctx.fillStyle = organism.genome.getColor();
+      // Draw organism body with trait-based appearance
+      let baseColor = organism.genome.getColor();
+
+      // Modify color based on diet type
+      if (genes.dietType > 0.6) {
+        // Carnivores: more red
+        baseColor = `hsl(0, 70%, 50%)`;
+      } else if (genes.dietType < 0.3) {
+        // Herbivores: more green
+        baseColor = `hsl(120, 60%, 50%)`;
+      }
+
+      ctx.fillStyle = baseColor;
       ctx.beginPath();
-      ctx.arc(organism.x, organism.y, size, 0, Math.PI * 2);
+
+      // Shape based on aggression
+      if (genes.aggression > 7) {
+        // Aggressive organisms: spiky shape
+        const spikes = 6;
+        for (let i = 0; i < spikes; i++) {
+          const angle = (i / spikes) * Math.PI * 2;
+          const isSpike = i % 2 === 0;
+          const r = isSpike ? size * 1.3 : size * 0.7;
+          const x = organism.x + Math.cos(angle) * r;
+          const y = organism.y + Math.sin(angle) * r;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.closePath();
+      } else {
+        // Peaceful organisms: circular
+        ctx.arc(organism.x, organism.y, size, 0, Math.PI * 2);
+      }
       ctx.fill();
+
+      // Add glow for high-efficiency organisms
+      if (genes.efficiency > 0.8) {
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = baseColor;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      }
 
       // Energy indicator
       const energyPercent = organism.energy / 100;
       ctx.fillStyle = `rgba(255, 255, 255, ${energyPercent * 0.5})`;
       ctx.beginPath();
-      ctx.arc(organism.x, organism.y, size * 0.6, 0, Math.PI * 2);
+      ctx.arc(organism.x, organism.y, size * 0.5, 0, Math.PI * 2);
       ctx.fill();
+
+      // Speed indicator (trailing effect for fast organisms)
+      if (genes.speed > 6) {
+        ctx.strokeStyle = `rgba(255, 255, 255, 0.2)`;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(organism.x - organism.velocity.x * 2, organism.y - organism.velocity.y * 2);
+        ctx.lineTo(organism.x, organism.y);
+        ctx.stroke();
+      }
 
       // Selection highlight
       if (selectedOrganism && selectedOrganism.id === organism.id) {
@@ -279,12 +369,14 @@ function SimulationPage({ onExit }) {
 
   const handleEvent = (eventType) => {
     simulationRef.current.triggerEvent(eventType);
+    achievementManager?.trackIntervention('event');
     renderSimulation();
   };
 
   const handleCloneSelected = () => {
     if (selectedOrganism) {
       simulationRef.current.cloneOrganism(selectedOrganism);
+      achievementManager?.trackIntervention('clone');
       renderSimulation();
     }
   };
@@ -292,6 +384,7 @@ function SimulationPage({ onExit }) {
   const handleMutateSelected = () => {
     if (selectedOrganism) {
       simulationRef.current.mutateOrganism(selectedOrganism, 0.5);
+      achievementManager?.trackIntervention('mutate');
       renderSimulation();
     }
   };
@@ -299,7 +392,16 @@ function SimulationPage({ onExit }) {
   const handleEliminateSelected = () => {
     if (selectedOrganism) {
       simulationRef.current.eliminateOrganism(selectedOrganism);
+      achievementManager?.trackIntervention('eliminate');
       setSelectedOrganism(null);
+      renderSimulation();
+    }
+  };
+
+  const handleEditGene = (geneName, value) => {
+    if (selectedOrganism) {
+      simulationRef.current.editGene(selectedOrganism, geneName, value);
+      achievementManager?.trackIntervention('edit');
       renderSimulation();
     }
   };
@@ -336,7 +438,7 @@ function SimulationPage({ onExit }) {
           <div className="simulation-controls-top">
             <div className="control-group">
               <button id="play-pause" className="control-btn" onClick={handlePlayPause}>
-                <span className="icon">{isRunning ? '�' : '�'}</span>
+                <span className="icon">{isRunning ? '�' : '�'}</span>
                 <span className="label">{isRunning ? 'Pause' : 'Start'}</span>
               </button>
               <button className="control-btn" onClick={handleNextGen} disabled={isRunning}>
@@ -482,21 +584,21 @@ function SimulationPage({ onExit }) {
                 <div className="trait-bar-item">
                   <span className="trait-bar-label">Speed</span>
                   <div className="trait-bar-bg">
-                    <div className="trait-bar-fill" style={{ width: `${(parseFloat(stats.avgSpeed) / 6) * 100}%` }}></div>
+                    <div className="trait-bar-fill" style={{ width: `${(parseFloat(stats.avgSpeed) / 10) * 100}%` }}></div>
                   </div>
                   <span className="trait-bar-value">{stats.avgSpeed}</span>
                 </div>
                 <div className="trait-bar-item">
                   <span className="trait-bar-label">Vision</span>
                   <div className="trait-bar-bg">
-                    <div className="trait-bar-fill" style={{ width: `${(parseInt(stats.avgVision) / 150) * 100}%` }}></div>
+                    <div className="trait-bar-fill" style={{ width: `${(parseInt(stats.avgVision) / 200) * 100}%` }}></div>
                   </div>
                   <span className="trait-bar-value">{stats.avgVision}</span>
                 </div>
                 <div className="trait-bar-item">
                   <span className="trait-bar-label">Size</span>
                   <div className="trait-bar-bg">
-                    <div className="trait-bar-fill" style={{ width: `${(parseFloat(stats.avgSize) / 20) * 100}%` }}></div>
+                    <div className="trait-bar-fill" style={{ width: `${(parseFloat(stats.avgSize) / 30) * 100}%` }}></div>
                   </div>
                   <span className="trait-bar-value">{stats.avgSize}</span>
                 </div>
@@ -506,6 +608,42 @@ function SimulationPage({ onExit }) {
                     <div className="trait-bar-fill" style={{ width: `${parseFloat(stats.avgEfficiency) * 100}%` }}></div>
                   </div>
                   <span className="trait-bar-value">{stats.avgEfficiency}</span>
+                </div>
+                <div className="trait-bar-item">
+                  <span className="trait-bar-label">Aggression</span>
+                  <div className="trait-bar-bg">
+                    <div className="trait-bar-fill" style={{ width: `${(parseFloat(stats.avgAggression) / 10) * 100}%` }}></div>
+                  </div>
+                  <span className="trait-bar-value">{stats.avgAggression}</span>
+                </div>
+                <div className="trait-bar-item">
+                  <span className="trait-bar-label">Diet</span>
+                  <div className="trait-bar-bg">
+                    <div className="trait-bar-fill" style={{ width: `${parseFloat(stats.avgDietType) * 100}%` }}></div>
+                  </div>
+                  <span className="trait-bar-value">{(parseFloat(stats.avgDietType) * 100).toFixed(0)}%</span>
+                </div>
+                <div className="trait-bar-item">
+                  <span className="trait-bar-label">Stability</span>
+                  <div className="trait-bar-bg">
+                    <div className="trait-bar-fill" style={{ width: `${parseFloat(stats.avgMutationStability) * 100}%` }}></div>
+                  </div>
+                  <span className="trait-bar-value">{stats.avgMutationStability}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Environment Panel */}
+            <div className="data-panel">
+              <h3 className="panel-title">Environment</h3>
+              <div className="stat-items">
+                <div className="stat-item">
+                  <span className="stat-label">Temperature</span>
+                  <span className="stat-value">{stats.temperature}°C</span>
+                </div>
+                <div className="stat-item">
+                  <span className="stat-label">Toxicity</span>
+                  <span className="stat-value">{stats.toxicity}</span>
                 </div>
               </div>
             </div>
@@ -542,6 +680,47 @@ function SimulationPage({ onExit }) {
           </div>
         </aside>
       </div>
+
+      {/* Mission Status Overlay */}
+      {missionStatus && (
+        <div className="mission-status-overlay">
+          <div className="mission-info">
+            <h3>{missionStatus.mission.name}</h3>
+            <div className="mission-objectives">
+              {missionStatus.objectives.map((obj) => (
+                <div key={obj.id} className={`objective ${obj.completed ? 'completed' : ''}`}>
+                  <span className="objective-checkbox">{obj.completed ? '✓' : '○'}</span>
+                  <span>{obj.description}</span>
+                </div>
+              ))}
+            </div>
+            {missionStatus.mission.completed && (
+              <div className="mission-complete">
+                <h2>Mission Complete!</h2>
+                <div className="stars">
+                  {[...Array(missionStatus.mission.stars)].map((_, i) => (
+                    <span key={i}>⭐</span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Achievement Notification */}
+      {showAchievement && (
+        <div className="achievement-notification">
+          <div className="achievement-content">
+            <span className="achievement-icon">{showAchievement.icon}</span>
+            <div className="achievement-text">
+              <h4>Achievement Unlocked!</h4>
+              <p>{showAchievement.name}</p>
+              <small>{showAchievement.description}</small>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

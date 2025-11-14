@@ -16,7 +16,10 @@ export class Genome {
         speed: Math.random() * 5 + 1,        // 1-6
         vision: Math.random() * 100 + 50,    // 50-150
         size: Math.random() * 15 + 5,        // 5-20
-        efficiency: Math.random() * 0.5 + 0.5 // 0.5-1.0
+        efficiency: Math.random() * 0.5 + 0.5, // 0.5-1.0
+        aggression: Math.random() * 10,      // 0-10 (0=passive, 10=aggressive)
+        dietType: Math.random(),             // 0=herbivore, 0.5=omnivore, 1=carnivore
+        mutationStability: Math.random() * 0.5 + 0.5 // 0.5-1.0 (higher=more stable)
       };
     }
 
@@ -38,21 +41,27 @@ export class Genome {
 
   // Mutate the genome
   mutate(mutationRate = 0.1) {
-    const mutate = (value, range, min = 0) => {
-      if (Math.random() < mutationRate) {
+    // Adjust mutation rate based on stability
+    const effectiveMutationRate = mutationRate * (2 - this.genes.mutationStability);
+
+    const mutate = (value, range, min = 0, max = Infinity) => {
+      if (Math.random() < effectiveMutationRate) {
         const change = (Math.random() - 0.5) * range * 0.3;
-        return Math.max(min, value + change);
+        return Math.max(min, Math.min(max, value + change));
       }
       return value;
     };
 
-    this.genes.speed = mutate(this.genes.speed, 5, 0.5);
-    this.genes.vision = mutate(this.genes.vision, 100, 30);
-    this.genes.size = mutate(this.genes.size, 15, 3);
-    this.genes.efficiency = mutate(this.genes.efficiency, 0.5, 0.3);
+    this.genes.speed = mutate(this.genes.speed, 5, 0.5, 10);
+    this.genes.vision = mutate(this.genes.vision, 100, 30, 200);
+    this.genes.size = mutate(this.genes.size, 15, 3, 30);
+    this.genes.efficiency = mutate(this.genes.efficiency, 0.5, 0.3, 1.0);
+    this.genes.aggression = mutate(this.genes.aggression, 10, 0, 10);
+    this.genes.dietType = mutate(this.genes.dietType, 1, 0, 1);
+    this.genes.mutationStability = mutate(this.genes.mutationStability, 0.5, 0.3, 1.0);
 
     // Mutate color slightly
-    if (Math.random() < mutationRate) {
+    if (Math.random() < effectiveMutationRate) {
       this.color.h = (this.color.h + (Math.random() - 0.5) * 60) % 360;
     }
   }
@@ -102,20 +111,42 @@ export class Organism {
   }
 
   // Update organism state
-  update(environment, deltaTime = 1) {
+  update(environment, deltaTime = 1, allOrganisms = []) {
     if (!this.alive) return;
 
     this.age += deltaTime;
 
-    // Find nearest food within vision range
-    const nearestFood = this.findNearestFood(environment.food);
+    // Determine behavior based on diet type and aggression
+    const isCarnivore = this.genome.genes.dietType > 0.6;
+    const isAggressive = this.genome.genes.aggression > 5;
 
-    if (nearestFood) {
-      this.target = nearestFood;
-      this.moveTowards(nearestFood);
+    if (isCarnivore || isAggressive) {
+      // Hunt other organisms
+      const nearestPrey = this.findNearestPrey(allOrganisms);
+      if (nearestPrey) {
+        this.target = nearestPrey;
+        this.moveTowards(nearestPrey);
+        // Try to attack if close enough
+        this.attackOrganism(nearestPrey);
+      } else {
+        // Fall back to food if no prey
+        const nearestFood = this.findNearestFood(environment.food);
+        if (nearestFood) {
+          this.target = nearestFood;
+          this.moveTowards(nearestFood);
+        } else {
+          this.randomWalk();
+        }
+      }
     } else {
-      // Random walk when no food visible
-      this.randomWalk();
+      // Herbivore behavior - seek food
+      const nearestFood = this.findNearestFood(environment.food);
+      if (nearestFood) {
+        this.target = nearestFood;
+        this.moveTowards(nearestFood);
+      } else {
+        this.randomWalk();
+      }
     }
 
     // Move
@@ -126,12 +157,19 @@ export class Organism {
     this.x = (this.x + environment.width) % environment.width;
     this.y = (this.y + environment.height) % environment.height;
 
-    // Energy cost based on movement and size
+    // Energy cost based on movement, size, and aggression
     const movementCost = (Math.abs(this.velocity.x) + Math.abs(this.velocity.y)) *
                           (this.genome.genes.size / 10) *
-                          (1 / this.genome.genes.efficiency);
+                          (1 / this.genome.genes.efficiency) *
+                          (1 + this.genome.genes.aggression / 20); // Aggressive organisms cost more
 
     this.energy -= movementCost * deltaTime * 0.1;
+
+    // Apply temperature effects if present
+    if (environment.temperature !== undefined) {
+      const tempStress = Math.abs(environment.temperature - 20) / 50;
+      this.energy -= tempStress * deltaTime * 0.05;
+    }
 
     // Check if organism dies
     if (this.energy <= 0) {
@@ -140,6 +178,26 @@ export class Organism {
 
     // Try to collect food
     this.collectFood(environment);
+  }
+
+  findNearestPrey(organisms) {
+    let nearest = null;
+    let minDist = this.genome.genes.vision;
+
+    for (let org of organisms) {
+      if (org === this || !org.alive) continue;
+
+      // Only hunt smaller or similar-sized organisms
+      if (org.genome.genes.size > this.genome.genes.size * 1.2) continue;
+
+      const dist = this.distance(org);
+      if (dist < minDist) {
+        minDist = dist;
+        nearest = org;
+      }
+    }
+
+    return nearest;
   }
 
   findNearestFood(foodArray) {
@@ -205,9 +263,32 @@ export class Organism {
     const foodScore = this.foodCollected * 10;
     const survivalBonus = this.age * 0.1;
     const efficiencyScore = this.energy > 0 ? this.energy : 0;
+    const combatBonus = (this.kills || 0) * 15; // Bonus for predators
 
-    this.fitness = foodScore + survivalBonus + efficiencyScore;
+    this.fitness = foodScore + survivalBonus + efficiencyScore + combatBonus;
     return this.fitness;
+  }
+
+  // Attack another organism (for predators/aggressive organisms)
+  attackOrganism(target) {
+    if (!this.alive || !target.alive) return false;
+
+    // Check if close enough to attack
+    const dist = this.distance(target);
+    if (dist > this.genome.genes.size + target.genome.genes.size) return false;
+
+    // Combat based on size and aggression
+    const attackPower = this.genome.genes.size * (1 + this.genome.genes.aggression / 10);
+    const defensePower = target.genome.genes.size * (1 + target.genome.genes.speed / 10);
+
+    if (attackPower > defensePower) {
+      target.alive = false;
+      this.energy += target.energy * 0.5; // Gain some energy from kill
+      this.kills = (this.kills || 0) + 1;
+      return true;
+    }
+
+    return false;
   }
 
   // Clone this organism
@@ -240,6 +321,8 @@ export class Environment {
     this.height = height;
     this.food = [];
     this.foodAbundance = 50; // Percentage
+    this.temperature = 20; // Neutral temperature (0-40 range, 20 is optimal)
+    this.toxicity = 0; // Environmental toxicity (0-10)
   }
 
   // Spawn food in the environment
@@ -290,7 +373,10 @@ export class Simulation {
       avgSpeed: [],
       avgVision: [],
       avgSize: [],
-      avgEfficiency: []
+      avgEfficiency: [],
+      avgAggression: [],
+      avgDietType: [],
+      avgMutationStability: []
     };
 
     // Initialize population
@@ -315,9 +401,9 @@ export class Simulation {
     // Update environment
     this.environment.update();
 
-    // Update all organisms
+    // Update all organisms (pass population for predator behavior)
     for (let organism of this.population) {
-      organism.update(this.environment);
+      organism.update(this.environment, 1, this.population);
     }
 
     // Check if generation should end
@@ -401,6 +487,15 @@ export class Simulation {
       this.stats.avgEfficiency.push(
         alive.reduce((sum, o) => sum + o.genome.genes.efficiency, 0) / alive.length
       );
+      this.stats.avgAggression.push(
+        alive.reduce((sum, o) => sum + o.genome.genes.aggression, 0) / alive.length
+      );
+      this.stats.avgDietType.push(
+        alive.reduce((sum, o) => sum + o.genome.genes.dietType, 0) / alive.length
+      );
+      this.stats.avgMutationStability.push(
+        alive.reduce((sum, o) => sum + o.genome.genes.mutationStability, 0) / alive.length
+      );
     }
   }
 
@@ -419,6 +514,21 @@ export class Simulation {
     if (index > -1) {
       this.population.splice(index, 1);
     }
+  }
+
+  // Gene editing with cost system
+  editGene(organism, geneName, value) {
+    if (!organism || !organism.alive) return false;
+
+    // Resource cost based on change magnitude
+    const oldValue = organism.genome.genes[geneName];
+    const changeMagnitude = Math.abs(value - oldValue);
+
+    // Editing has consequences - reduces stability temporarily
+    organism.genome.genes[geneName] = value;
+    organism.genome.genes.mutationStability *= 0.8; // Editing reduces stability
+
+    return true;
   }
 
   triggerEvent(eventType) {
@@ -504,7 +614,18 @@ export class Simulation {
         : '0.00',
       avgEfficiency: alive.length > 0
         ? (alive.reduce((sum, o) => sum + o.genome.genes.efficiency, 0) / alive.length).toFixed(2)
-        : '0.00'
+        : '0.00',
+      avgAggression: alive.length > 0
+        ? (alive.reduce((sum, o) => sum + o.genome.genes.aggression, 0) / alive.length).toFixed(2)
+        : '0.00',
+      avgDietType: alive.length > 0
+        ? (alive.reduce((sum, o) => sum + o.genome.genes.dietType, 0) / alive.length).toFixed(2)
+        : '0.00',
+      avgMutationStability: alive.length > 0
+        ? (alive.reduce((sum, o) => sum + o.genome.genes.mutationStability, 0) / alive.length).toFixed(2)
+        : '0.00',
+      temperature: this.environment.temperature.toFixed(1),
+      toxicity: this.environment.toxicity.toFixed(1)
     };
   }
 }
