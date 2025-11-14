@@ -3,6 +3,21 @@
  * Core logic for genetic simulation, organisms, and evolution
  */
 
+import {
+  InstinctLayer,
+  BehavioralBrain,
+  OrganismMemory,
+  ProximitySystem,
+  ThreatPredictor,
+  ResourceForecaster
+} from './AIBehavior.js';
+
+import {
+  EvolutionIntelligence,
+  EcosystemIntelligence,
+  PlayerInteractionIntelligence
+} from './EvolutionIntelligence.js';
+
 // ============================================
 // GENOME CLASS
 // ============================================
@@ -99,32 +114,122 @@ export class Organism {
     this.fitness = 0;
     this.velocity = { x: 0, y: 0 };
     this.target = null;
+
+    // AI System Components (4-Layer Architecture)
+    this.instinctLayer = new InstinctLayer(this);
+    this.behavioralBrain = new BehavioralBrain(this);
+    this.memory = new OrganismMemory();
+    this.proximitySystem = new ProximitySystem(this);
+    this.threatPredictor = new ThreatPredictor(this);
+    this.resourceForecaster = new ResourceForecaster(this);
+
+    // AI State
+    this.currentBehavior = null;
+    this.personality = Math.random(); // Individual variation
   }
 
-  // Update organism state
+  // Update organism state with AI decision-making
   update(environment, deltaTime = 1) {
     if (!this.alive) return;
 
     this.age += deltaTime;
 
-    // Find nearest food within vision range
-    const nearestFood = this.findNearestFood(environment.food);
+    // ========================================================================
+    // LAYER 1: INSTINCT LAYER - Immediate survival reactions
+    // ========================================================================
+    const instincts = this.instinctLayer.evaluateInstincts(environment);
 
-    if (nearestFood) {
-      this.target = nearestFood;
-      this.moveTowards(nearestFood);
+    // Handle critical instincts immediately
+    if (instincts.exhaustion.active && instincts.exhaustion.urgency > 0.8) {
+      // Rest when critically exhausted
+      this.velocity.x *= 0.3;
+      this.velocity.y *= 0.3;
+    } else if (instincts.immediateFood.active) {
+      // Consume food immediately if touching it
+      this.collectFood(environment);
     } else {
-      // Random walk when no food visible
-      this.randomWalk();
+      // ========================================================================
+      // LAYER 2: BEHAVIORAL BRAIN - Utility-based decision making
+      // ========================================================================
+      const behavior = this.behavioralBrain.evaluateBehaviors(
+        environment,
+        instincts,
+        this.memory
+      );
+
+      this.currentBehavior = behavior;
+
+      // Execute the chosen behavior
+      if (behavior && behavior.action) {
+        behavior.action();
+      }
+
+      // ========================================================================
+      // ADVANCED AI MODULES
+      // ========================================================================
+
+      // Proximity reasoning - understand nearby entities
+      const proximityInfo = this.proximitySystem.evaluateProximity(environment);
+
+      // Threat prediction - anticipate dangers
+      const threats = this.threatPredictor.predictThreats(environment);
+
+      // Handle predicted threats with avoidance
+      if (threats.length > 0) {
+        const mostUrgentThreat = threats.reduce((prev, curr) =>
+          curr.severity > prev.severity ? curr : prev
+        );
+
+        if (mostUrgentThreat.avoidanceVector) {
+          const avoidForce = 0.5;
+          this.velocity.x += mostUrgentThreat.avoidanceVector.x * avoidForce;
+          this.velocity.y += mostUrgentThreat.avoidanceVector.y * avoidForce;
+        }
+      }
+
+      // Resource forecasting - plan ahead
+      const forecast = this.resourceForecaster.forecastResourceNeeds(environment);
+
+      // Use optimal path if available
+      if (forecast.optimalFeedingPath && this.energy < 70) {
+        this.target = forecast.optimalFeedingPath;
+        this.moveTowards(forecast.optimalFeedingPath);
+      }
     }
+
+    // ========================================================================
+    // MOVEMENT AND PHYSICS
+    // ========================================================================
 
     // Move
     this.x += this.velocity.x * deltaTime;
     this.y += this.velocity.y * deltaTime;
 
-    // Wrap around edges
-    this.x = (this.x + environment.width) % environment.width;
-    this.y = (this.y + environment.height) % environment.height;
+    // Boundary handling - bounce off edges instead of wrapping
+    const margin = this.genome.genes.size;
+    if (this.x < margin) {
+      this.x = margin;
+      this.velocity.x = Math.abs(this.velocity.x);
+    }
+    if (this.x > environment.width - margin) {
+      this.x = environment.width - margin;
+      this.velocity.x = -Math.abs(this.velocity.x);
+    }
+    if (this.y < margin) {
+      this.y = margin;
+      this.velocity.y = Math.abs(this.velocity.y);
+    }
+    if (this.y > environment.height - margin) {
+      this.y = environment.height - margin;
+      this.velocity.y = -Math.abs(this.velocity.y);
+    }
+
+    // Record position in memory
+    this.memory.recordPosition(this.x, this.y);
+
+    // ========================================================================
+    // ENERGY MANAGEMENT
+    // ========================================================================
 
     // Energy cost based on movement and size
     const movementCost = (Math.abs(this.velocity.x) + Math.abs(this.velocity.y)) *
@@ -136,6 +241,8 @@ export class Organism {
     // Check if organism dies
     if (this.energy <= 0) {
       this.alive = false;
+      // Record death location as danger zone for others
+      this.memory.recordDangerZone(this.x, this.y, 'starvation');
     }
 
     // Try to collect food
@@ -186,7 +293,12 @@ export class Organism {
       const food = environment.food[i];
       if (this.distance(food) < this.genome.genes.size) {
         this.energy += food.energy;
+        this.energy = Math.min(this.energy, 120); // Cap energy at 120
         this.foodCollected++;
+
+        // Record successful food location in memory
+        this.memory.recordFoodFound(food.x, food.y);
+
         environment.food.splice(i, 1);
         break;
       }
@@ -240,6 +352,7 @@ export class Environment {
     this.height = height;
     this.food = [];
     this.foodAbundance = 50; // Percentage
+    this.organisms = []; // Track organisms for AI awareness
   }
 
   // Spawn food in the environment
@@ -283,6 +396,11 @@ export class Simulation {
     this.mutationRate = 0.1;
     this.selectionPressure = 0.5; // Top 50% survive
 
+    // AI Intelligence Systems (Layers 3 & 4)
+    this.evolutionIntelligence = new EvolutionIntelligence();
+    this.ecosystemIntelligence = new EcosystemIntelligence();
+    this.playerInteractionAI = new PlayerInteractionIntelligence();
+
     // Statistics
     this.stats = {
       avgFitness: [],
@@ -290,7 +408,9 @@ export class Simulation {
       avgSpeed: [],
       avgVision: [],
       avgSize: [],
-      avgEfficiency: []
+      avgEfficiency: [],
+      ecosystemAnalysis: null,
+      evolutionAnalysis: null
     };
 
     // Initialize population
@@ -312,7 +432,8 @@ export class Simulation {
   update() {
     if (!this.running) return;
 
-    // Update environment
+    // Update environment with current organism list
+    this.environment.organisms = this.population;
     this.environment.update();
 
     // Update all organisms
@@ -332,12 +453,33 @@ export class Simulation {
     return this.population.every(org => !org.alive);
   }
 
-  // Evolution: Create next generation
+  // Evolution: Create next generation with intelligent selection
   nextGeneration() {
     // Calculate fitness for all organisms
     for (let organism of this.population) {
       organism.calculateFitness();
     }
+
+    // ========================================================================
+    // LAYER 3: EVOLUTION INTELLIGENCE - Analyze and adapt
+    // ========================================================================
+    const evolutionAnalysis = this.evolutionIntelligence.analyzeGeneration(
+      this.population,
+      this.environment
+    );
+
+    // ========================================================================
+    // LAYER 4: ECOSYSTEM INTELLIGENCE - Understand population dynamics
+    // ========================================================================
+    const ecosystemAnalysis = this.ecosystemIntelligence.analyzeEcosystem(
+      this.population,
+      this.environment,
+      this.generation
+    );
+
+    // Store analyses in stats
+    this.stats.evolutionAnalysis = evolutionAnalysis;
+    this.stats.ecosystemAnalysis = ecosystemAnalysis;
 
     // Sort by fitness
     this.population.sort((a, b) => b.fitness - a.fitness);
@@ -345,9 +487,20 @@ export class Simulation {
     // Record statistics
     this.recordStats();
 
-    // Select top performers
-    const survivalCount = Math.floor(this.population.length * this.selectionPressure);
-    const survivors = this.population.slice(0, Math.max(survivalCount, 2));
+    // ========================================================================
+    // INTELLIGENT PARENT SELECTION (uses Layer 3)
+    // ========================================================================
+    const survivors = this.evolutionIntelligence.selectParents(
+      this.population,
+      this.selectionPressure
+    );
+
+    // ========================================================================
+    // ADAPTIVE MUTATION RATE (uses Layer 3)
+    // ========================================================================
+    const adaptiveMutationRate = this.evolutionIntelligence.getAdaptiveMutationRate(
+      this.mutationRate
+    );
 
     // Create new population through breeding
     const newPopulation = [];
@@ -361,8 +514,10 @@ export class Simulation {
       // Crossover
       const childGenome = Genome.crossover(parent1.genome, parent2.genome);
 
-      // Mutation
-      childGenome.mutate(this.mutationRate);
+      // ========================================================================
+      // INTELLIGENT MUTATION (uses Layer 3)
+      // ========================================================================
+      this.evolutionIntelligence.intelligentMutation(childGenome, adaptiveMutationRate);
 
       // Create new organism
       const x = Math.random() * this.environment.width;
@@ -422,6 +577,19 @@ export class Simulation {
   }
 
   triggerEvent(eventType) {
+    // ========================================================================
+    // PLAYER INTERACTION INTELLIGENCE
+    // ========================================================================
+    const ecosystemState = this.ecosystemIntelligence.ecosystemState;
+    this.playerInteractionAI.recordIntervention(eventType, ecosystemState);
+
+    const adaptiveResponse = this.playerInteractionAI.generateResponse(
+      eventType,
+      this.population,
+      this.environment
+    );
+
+    // Apply the event
     switch (eventType) {
       case 'meteor':
         // Kill random 30% of population
@@ -430,6 +598,9 @@ export class Simulation {
           const randomIndex = Math.floor(Math.random() * this.population.length);
           this.population[randomIndex].alive = false;
         }
+
+        // AI Response: Survivors become more dispersed
+        this.playerInteractionAI.applyAdaptiveResponse(this.population, adaptiveResponse);
         break;
 
       case 'ice-age':
@@ -437,11 +608,17 @@ export class Simulation {
         for (let organism of this.population) {
           organism.genome.genes.efficiency *= 0.7;
         }
+
+        // AI Response: Population will evolve toward efficiency
+        this.evolutionIntelligence.adaptiveWeights.efficiency += 0.3;
         break;
 
       case 'abundance':
         // Triple food
         this.environment.spawnFood(100);
+
+        // AI Response: Population becomes more exploratory
+        this.playerInteractionAI.applyAdaptiveResponse(this.population, adaptiveResponse);
         break;
 
       case 'plague':
@@ -449,6 +626,9 @@ export class Simulation {
         for (let organism of this.population) {
           organism.energy = Math.max(10, organism.energy * 0.5);
         }
+
+        // AI Response: Survivors will be more resilient
+        this.evolutionIntelligence.adaptiveWeights.efficiency += 0.2;
         break;
     }
   }
@@ -484,7 +664,8 @@ export class Simulation {
   getStats() {
     const alive = this.population.filter(o => o.alive);
 
-    return {
+    // Basic stats
+    const basicStats = {
       population: alive.length,
       avgFitness: alive.length > 0
         ? (alive.reduce((sum, o) => sum + o.fitness, 0) / alive.length).toFixed(2)
@@ -506,5 +687,49 @@ export class Simulation {
         ? (alive.reduce((sum, o) => sum + o.genome.genes.efficiency, 0) / alive.length).toFixed(2)
         : '0.00'
     };
+
+    // AI Intelligence metrics
+    const aiMetrics = {
+      ecosystemPhase: this.ecosystemIntelligence.ecosystemState.phase,
+      ecosystemPressure: this.ecosystemIntelligence.ecosystemState.pressure,
+      diversity: this.ecosystemIntelligence.ecosystemState.diversity,
+      evolutionaryPressures: this.evolutionIntelligence.environmentalPressures,
+      adaptiveWeights: this.evolutionIntelligence.adaptiveWeights,
+      intelligenceSummary: this.ecosystemIntelligence.getIntelligenceSummary()
+    };
+
+    // Behavioral analysis
+    const behaviorStats = alive.length > 0 ? {
+      avgEnergy: (alive.reduce((sum, o) => sum + o.energy, 0) / alive.length).toFixed(2),
+      currentBehaviors: this.analyzeBehaviors(alive),
+      memoryUsage: this.analyzeMemoryUsage(alive)
+    } : null;
+
+    return {
+      ...basicStats,
+      ai: aiMetrics,
+      behavior: behaviorStats
+    };
+  }
+
+  analyzeBehaviors(population) {
+    const behaviors = {};
+    population.forEach(org => {
+      if (org.currentBehavior) {
+        const name = org.currentBehavior.name || 'unknown';
+        behaviors[name] = (behaviors[name] || 0) + 1;
+      }
+    });
+    return behaviors;
+  }
+
+  analyzeMemoryUsage(population) {
+    const totalMemorySize = population.reduce((sum, org) => {
+      return sum + org.memory.recentPositions.length +
+             org.memory.dangerZones.length +
+             org.memory.foodDensityMap.size;
+    }, 0);
+
+    return (totalMemorySize / population.length).toFixed(2);
   }
 }
