@@ -111,37 +111,175 @@ function SimulationPage({ onExit }) {
       if (!organism.alive) return;
 
       const size = organism.genome.genes.size;
+      const energyPercent = organism.energy / 100;
+      const wobble = Math.sin(organism.wobblePhase) * size * 0.15;
+      const pulse = Math.sin(organism.pulsePhase) * size * 0.1;
+
+      ctx.save();
+      ctx.translate(organism.x, organism.y);
 
       // Draw vision range (if selected)
       if (selectedOrganism && selectedOrganism.id === organism.id) {
         ctx.strokeStyle = 'rgba(74, 168, 255, 0.2)';
         ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.arc(organism.x, organism.y, organism.genome.genes.vision, 0, Math.PI * 2);
+        ctx.arc(0, 0, organism.genome.genes.vision, 0, Math.PI * 2);
         ctx.stroke();
       }
 
-      // Draw organism body
-      ctx.fillStyle = organism.genome.getColor();
+      ctx.rotate(organism.rotation);
+
+      // === DRAW TENTACLES (behind body) ===
+      const tentacleCount = Math.min(Math.floor(organism.genome.genes.size / 3), 6);
+      const color = organism.genome.getColor();
+
+      for (let i = 0; i < tentacleCount; i++) {
+        const angle = (i / tentacleCount) * Math.PI * 2;
+        const phase = organism.tentaclePhases[i];
+        const tentacleLength = size * (0.8 + Math.sin(phase) * 0.3);
+        const tentacleWave = Math.sin(phase * 2) * size * 0.4;
+
+        ctx.strokeStyle = color;
+        ctx.lineWidth = Math.max(2, size * 0.15);
+        ctx.lineCap = 'round';
+
+        ctx.beginPath();
+        ctx.moveTo(
+          Math.cos(angle) * size * 0.7,
+          Math.sin(angle) * size * 0.7
+        );
+
+        // Bezier curve for organic tentacle movement
+        const ctrlX1 = Math.cos(angle) * size * 1.5 + tentacleWave * Math.cos(angle + Math.PI / 2);
+        const ctrlY1 = Math.sin(angle) * size * 1.5 + tentacleWave * Math.sin(angle + Math.PI / 2);
+        const endX = Math.cos(angle) * tentacleLength + wobble * Math.cos(angle + Math.PI / 2);
+        const endY = Math.sin(angle) * tentacleLength + wobble * Math.sin(angle + Math.PI / 2);
+
+        ctx.quadraticCurveTo(ctrlX1, ctrlY1, endX, endY);
+        ctx.stroke();
+
+        // Tentacle tip
+        ctx.fillStyle = `rgba(111, 255, 176, ${0.6 + Math.sin(phase) * 0.2})`;
+        ctx.beginPath();
+        ctx.arc(endX, endY, size * 0.12, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // === DRAW BODY ===
+      // Body shape (squished ellipse based on movement)
+      const bodyRadiusX = size + pulse;
+      const bodyRadiusY = (size + pulse) * organism.bodySquish;
+
+      // Outer glow when eating
+      if (organism.isEating) {
+        const glowSize = size * (1.5 - organism.eatingTimer / 40);
+        ctx.shadowBlur = 20;
+        ctx.shadowColor = 'rgba(111, 255, 176, 0.8)';
+        ctx.fillStyle = 'rgba(111, 255, 176, 0.2)';
+        ctx.beginPath();
+        ctx.ellipse(0, 0, glowSize, glowSize, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      }
+
+      // Main body
+      ctx.fillStyle = color;
       ctx.beginPath();
-      ctx.arc(organism.x, organism.y, size, 0, Math.PI * 2);
+      ctx.ellipse(0, 0, bodyRadiusX, bodyRadiusY, 0, 0, Math.PI * 2);
       ctx.fill();
 
-      // Energy indicator
-      const energyPercent = organism.energy / 100;
-      ctx.fillStyle = `rgba(255, 255, 255, ${energyPercent * 0.5})`;
+      // Body texture/pattern based on efficiency
+      const patternDots = Math.floor(organism.genome.genes.efficiency * 8);
+      ctx.fillStyle = `rgba(255, 255, 255, 0.2)`;
+      for (let i = 0; i < patternDots; i++) {
+        const dotAngle = (i / patternDots) * Math.PI * 2;
+        const dotDist = size * 0.5;
+        ctx.beginPath();
+        ctx.arc(
+          Math.cos(dotAngle) * dotDist,
+          Math.sin(dotAngle) * dotDist,
+          size * 0.08,
+          0,
+          Math.PI * 2
+        );
+        ctx.fill();
+      }
+
+      // Energy core (pulsing center)
+      const coreSize = (size * 0.4 * energyPercent) + pulse * 0.5;
+      const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, coreSize);
+      gradient.addColorStop(0, `rgba(255, 255, 255, ${energyPercent * 0.8})`);
+      gradient.addColorStop(0.5, `rgba(111, 255, 176, ${energyPercent * 0.4})`);
+      gradient.addColorStop(1, 'rgba(111, 255, 176, 0)');
+
+      ctx.fillStyle = gradient;
       ctx.beginPath();
-      ctx.arc(organism.x, organism.y, size * 0.6, 0, Math.PI * 2);
+      ctx.arc(0, 0, coreSize, 0, Math.PI * 2);
       ctx.fill();
+
+      // === DRAW ANTENNAE (in front) ===
+      const antennaCount = Math.min(Math.floor(organism.genome.genes.vision / 50), 2);
+
+      for (let i = 0; i < antennaCount; i++) {
+        const baseAngle = organism.antennaAngle + (i === 0 ? -0.3 : 0.3);
+        const antennaLength = size * 1.2;
+
+        ctx.strokeStyle = `rgba(74, 168, 255, 0.6)`;
+        ctx.lineWidth = Math.max(1, size * 0.08);
+        ctx.lineCap = 'round';
+
+        ctx.beginPath();
+        ctx.moveTo(0, -size * 0.5);
+
+        const wave = Math.sin(organism.wobblePhase + i) * size * 0.2;
+        ctx.lineTo(
+          Math.cos(baseAngle - organism.rotation) * antennaLength + wave,
+          Math.sin(baseAngle - organism.rotation) * antennaLength - size * 0.5
+        );
+        ctx.stroke();
+
+        // Antenna sensor tip
+        ctx.fillStyle = 'rgba(74, 168, 255, 0.8)';
+        ctx.shadowBlur = 8;
+        ctx.shadowColor = 'rgba(74, 168, 255, 0.8)';
+        ctx.beginPath();
+        ctx.arc(
+          Math.cos(baseAngle - organism.rotation) * antennaLength + wave,
+          Math.sin(baseAngle - organism.rotation) * antennaLength - size * 0.5,
+          size * 0.15,
+          0,
+          Math.PI * 2
+        );
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      }
+
+      // === LOW ENERGY INDICATOR ===
+      if (energyPercent < 0.3) {
+        // Flashing warning
+        const flash = Math.sin(organism.age * 0.3) > 0;
+        if (flash) {
+          ctx.strokeStyle = 'rgba(255, 111, 97, 0.6)';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(0, 0, size + 5, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      }
 
       // Selection highlight
       if (selectedOrganism && selectedOrganism.id === organism.id) {
         ctx.strokeStyle = 'rgba(111, 255, 176, 0.8)';
         ctx.lineWidth = 2;
+        ctx.setLineDash([5, 5]);
+        ctx.lineDashOffset = -organism.age * 0.2;
         ctx.beginPath();
-        ctx.arc(organism.x, organism.y, size + 3, 0, Math.PI * 2);
+        ctx.arc(0, 0, size + 6, 0, Math.PI * 2);
         ctx.stroke();
+        ctx.setLineDash([]);
       }
+
+      ctx.restore();
     });
   };
 
@@ -336,7 +474,7 @@ function SimulationPage({ onExit }) {
           <div className="simulation-controls-top">
             <div className="control-group">
               <button id="play-pause" className="control-btn" onClick={handlePlayPause}>
-                <span className="icon">{isRunning ? 'ø' : '¶'}</span>
+                <span className="icon">{isRunning ? 'ï¿½' : 'ï¿½'}</span>
                 <span className="label">{isRunning ? 'Pause' : 'Start'}</span>
               </button>
               <button className="control-btn" onClick={handleNextGen} disabled={isRunning}>

@@ -99,6 +99,16 @@ export class Organism {
     this.fitness = 0;
     this.velocity = { x: 0, y: 0 };
     this.target = null;
+
+    // Visual properties for personality
+    this.rotation = Math.random() * Math.PI * 2;
+    this.wobblePhase = Math.random() * Math.PI * 2;
+    this.tentaclePhases = Array.from({ length: 6 }, () => Math.random() * Math.PI * 2);
+    this.pulsePhase = Math.random() * Math.PI * 2;
+    this.antennaAngle = 0;
+    this.bodySquish = 1;
+    this.isEating = false;
+    this.eatingTimer = 0;
   }
 
   // Update organism state
@@ -136,6 +146,46 @@ export class Organism {
     // Check if organism dies
     if (this.energy <= 0) {
       this.alive = false;
+    }
+
+    // Update visual animations
+    const speed = Math.sqrt(this.velocity.x ** 2 + this.velocity.y ** 2);
+
+    // Rotation based on movement direction
+    if (speed > 0.1) {
+      const targetRotation = Math.atan2(this.velocity.y, this.velocity.x);
+      this.rotation += (targetRotation - this.rotation) * 0.1;
+    }
+
+    // Wobble increases with speed
+    this.wobblePhase += (speed * 0.1 + 0.05) * deltaTime;
+
+    // Tentacles wave faster when moving
+    this.tentaclePhases = this.tentaclePhases.map(phase =>
+      phase + (speed * 0.05 + 0.1) * deltaTime
+    );
+
+    // Body pulse based on energy
+    this.pulsePhase += 0.05 * deltaTime;
+
+    // Body squishes when moving fast
+    this.bodySquish = 1 - (speed / 10) * 0.2;
+
+    // Antenna points toward target
+    if (nearestFood) {
+      const targetAngle = Math.atan2(
+        nearestFood.y - this.y,
+        nearestFood.x - this.x
+      );
+      this.antennaAngle += (targetAngle - this.antennaAngle) * 0.1;
+    }
+
+    // Eating animation
+    if (this.isEating) {
+      this.eatingTimer -= deltaTime;
+      if (this.eatingTimer <= 0) {
+        this.isEating = false;
+      }
     }
 
     // Try to collect food
@@ -188,6 +238,11 @@ export class Organism {
         this.energy += food.energy;
         this.foodCollected++;
         environment.food.splice(i, 1);
+
+        // Trigger eating animation
+        this.isEating = true;
+        this.eatingTimer = 20; // Frames
+
         break;
       }
     }
